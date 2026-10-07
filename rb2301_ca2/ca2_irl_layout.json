@@ -1,0 +1,95 @@
+{
+  "generator": "tools/irl_maze_generator.py",
+  "seed": 1506,
+  "args": {
+    "width_m": 3.0,
+    "height_m": 3.0,
+    "n_goals": 4,
+    "corner_block_m": 0.2,
+    "cell_size": 0.2
+  },
+  "resolution": 0.2,
+  "shape": [
+    16,
+    16
+  ],
+  "size_m": [
+    3.2,
+    3.2
+  ],
+  "frame": "maze-local: (0,0) is the outer corner of array cell [0,0]; +x along array axis 0, +y along axis 1",
+  "runs": {
+    "test1": {
+      "start": [
+        0.5,
+        0.5
+      ],
+      "goals": [
+        [
+          2.9,
+          1.1
+        ],
+        [
+          1.7,
+          0.5
+        ],
+        [
+          2.3,
+          0.5
+        ],
+        [
+          1.7,
+          1.1
+        ]
+      ]
+    },
+    "test2": {
+      "start": [
+        2.7,
+        2.7
+      ],
+      "goals": [
+        [
+          0.5,
+          1.1
+        ],
+        [
+          1.7,
+          2.3
+        ],
+        [
+          0.5,
+          2.9
+        ],
+        [
+          1.1,
+          2.9
+        ]
+      ]
+    },
+    "full": {
+      "start": [
+        0.5,
+        2.1
+      ],
+      "goals": [
+        [
+          1.1,
+          0.5
+        ],
+        [
+          2.3,
+          2.9
+        ],
+        [
+          2.9,
+          0.5
+        ],
+        [
+          0.5,
+          1.7
+        ]
+      ]
+    }
+  }
+}
