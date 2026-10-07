@@ -282,7 +282,8 @@ class WaypointNode(Node):
         self.turn_kp, self.turn_ki, self.turn_kd = 0.05, 0.01, 0.005    # turn-on-the-spot at a waypoint
         self.steer_kp, self.steer_ki, self.steer_kd = 0.03, 0.0, 0.002  # heading correction while driving
         self.steer_limit = 1.0     # max steering rate while driving (rad/s)
-        self.min_turn_value = 0.15 # minimum turn rate so it doesn't stall just short of the heading tolerance
+        self.min_turn_value = 0.5  # minimum turn rate (rad/s); lower than this and friction stops it just short of the target
+        self.heading_tolerance = 2. # degrees; must be wide enough that min_turn_value*dt (~1.4 deg/tick) can't jump over it
         self.dt = 0.05             # controller period, matches create_timer(0.05, ...)
         self.h_integral, self.h_prev_error = 0.0, None # heading PID state, reset on every new desiredPose
 
@@ -415,7 +416,7 @@ class WaypointNode(Node):
     def getDifference(self, k, actual):
         return ((self.desiredPose[k] != None) and (abs(self.desiredPose[k] - actual[k]) > self.size_bounds))
     def getDifferenceH(self, actual):
-        return ((self.desiredPose['h'] != None) and (abs(self.desiredPose['h']%360. - actual['h']%360.) > self.turn_value/4.))
+        return ((self.desiredPose['h'] != None) and (abs(wrap_deg(self.desiredPose['h'] - actual['h'])) > self.heading_tolerance))
 
 
     def getGraph(self):
