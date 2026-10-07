@@ -278,14 +278,20 @@ class WaypointNode(Node):
         self.min_run_value = 0.4
         self.run_multiplier = 5. 
 
+        # heading PID gains (tune these). Errors are in degrees, outputs in rad/s.
+        self.turn_kp, self.turn_ki, self.turn_kd = 0.05, 0.01, 0.005    # turn-on-the-spot at a waypoint
+        self.steer_kp, self.steer_ki, self.steer_kd = 0.03, 0.0, 0.002  # heading correction while driving
+        self.steer_limit = 1.0     # max steering rate while driving (rad/s)
+        self.min_turn_value = 0.15 # minimum turn rate so it doesn't stall just short of the heading tolerance
+        self.dt = 0.05             # controller period, matches create_timer(0.05, ...)
+        self.h_integral, self.h_prev_error = 0.0, None # heading PID state, reset on every new desiredPose
+
         self.size_bounds = 0.2#/2.
         self.delay_counter = 40 # give time to run cmd
 
         # check_grid_validity
         # draw_grid_map
         # animate_path
-
-
 
     def timer_callback(self):
         if self.delay_counter > 0:  # !!! i also hid self.pose print below
@@ -299,7 +305,7 @@ class WaypointNode(Node):
         now = time.time()
         if now - getattr(self, "_last_pose_log", 0.0) >= 1.0: # at most once a second, so it does not bury the map / warnings below
             self._last_pose_log = now
-            # self.get_logger().debug(f"Pose: {self.pose}")
+            self.get_logger().debug(f"Pose: {self.pose}")
 
         if self.calibrate:
             self._print_calibration()
@@ -634,6 +640,7 @@ class WaypointNode(Node):
         # check [point A to point B] progress
         self.desiredPose = {'x': None, 'y': None, 'h': None}
         self.outputPose = {'x': 0, 'y': 0, 'h': 0}
+        self.h_integral, self.h_prev_error = 0.0, None # new target, clear old integral/derivative
 
         # replace w/ waypoint: (in terms of world coordinates)
         [x, y] = grid_to_world(*self.WIP_WPs[self.WP_idx], self.origin, self.resolution)
@@ -684,7 +691,7 @@ class WaypointNode(Node):
             self.desiredPose['h'] = value%360.
             # print(f"{rx:.3f}, {ry:.3f} to {x:.3f}, {y:.3f}   {value:.3f}")
             self.outputPose['h'] = self.turn_value * (-1 if value < 0 else 1)
-            
+            # ⚠️⚠️⚠️ optionally, do PID
 
         else: # hasn't reached waypoint
             STATE = 'MOVING TO WAYPOINT'
@@ -715,33 +722,41 @@ class WaypointNode(Node):
             
             # given angle and target angle, how to find which direction to turn?
             # ⚠️⚠️⚠️ i searched so i can't explain rn
-            value = (self.desiredPose['h']%360. - headingDeg + 180.)%360. -180. 
+            value = wrap_deg(self.desiredPose['h'] - headingDeg) # heading error in degrees, +ve = turn left (CCW)
 
-            if (value > 0):
-                self.outputPose['h'] = self.turn_value
-            elif (value < 0):
-                self.outputPose['h'] = -self.turn_value
-            else:
-                print('illegal')
-                self.outputPose['h'] = self.turn_value
-
+            # PID on heading error
+            self.h_integral = np.clip(self.h_integral + value*self.dt, -20., 20.) # clamp so it can't wind up
+            derivative = 0. if self.h_prev_error is None else (value - self.h_prev_error)/self.dt
+            self.h_prev_error = value
+            turn = self.turn_kp*value + self.turn_ki*self.h_integral + self.turn_kd*derivative
+            if abs(turn) < self.min_turn_value: turn = self.min_turn_value * (1 if value >= 0 else -1)
+            self.outputPose['h'] = turn
         # ⚠️⚠️⚠️ turning changes the pose as well. include heading later.
         elif self.STATE == 'MOVING TO WAYPOINT':
-            # have: desired pose (x, y)
+            # have: desired pose (x, y), robot pose (rx, ry), robot heading
             [x, y] = [self.desiredPose["x"], self.desiredPose["y"]]
             heading = -heading # hmmm?
             nx = (x - rx) * np.cos(heading) - (y - ry) * np.sin(heading) # target x, y
             ny = (x - rx) * np.sin(heading) + (y - ry) * np.cos(heading) # rotate desired to the perspective of robot, around (rx, ry), ignore +(rx, ry) offset
             print(f"{nx:.3f}, {ny:.3f} around {rx:.3f}, {ry:.3f} to {x:.3f}, {y:.3f}")
+            #       1.502, 0.051       around -0.035, 0.001      to -0.100, -1.500
 
-            # exit()
+            
+
             error = nx
             # x should be +ve when moving to goal, then flipping signs if it overshoots...
             self.outputPose['x'] = max(self.run_multiplier*error, self.min_run_value) if (error > 0) else min(self.run_multiplier*error, -self.min_run_value)
-            # -1.505, 0.106 around -0.049, 0.008 to -0.100, -1.500
 
-            # heading is free to change
-            # self.outputPose['h'] = 
+            # heading correction: PID on the bearing to the waypoint in the robot frame (+ve = waypoint is to the left)
+            if np.hypot(nx, ny) > 0.05: # bearing is noisy when right on top of the waypoint
+                bearing = np.rad2deg(np.arctan2(ny, nx))
+                if nx < 0: bearing = wrap_deg(bearing - 180.) # overshot and reversing: line the back up instead of spinning round
+                self.h_integral = np.clip(self.h_integral + bearing*self.dt, -20., 20.)
+                derivative = 0. if self.h_prev_error is None else (bearing - self.h_prev_error)/self.dt
+                self.h_prev_error = bearing
+                steer = self.steer_kp*bearing + self.steer_ki*self.h_integral + self.steer_kd*derivative
+                self.outputPose['h'] = np.clip(steer, -self.steer_limit, self.steer_limit)
+
 
 
 class NODE:
