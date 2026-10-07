@@ -732,6 +732,7 @@ class WaypointNode(Node):
             turn = self.turn_kp*value + self.turn_ki*self.h_integral + self.turn_kd*derivative
             if abs(turn) < self.min_turn_value: turn = self.min_turn_value * (1 if value >= 0 else -1)
             self.outputPose['h'] = turn
+            print(f"[TURN]  target {self.desiredPose['h']%360.:7.2f} deg | current {headingDeg:7.2f} deg | error {value:+7.2f} deg | cmd {turn:+.2f} rad/s")
         # ⚠️⚠️⚠️ turning changes the pose as well. include heading later.
         elif self.STATE == 'MOVING TO WAYPOINT':
             # have: desired pose (x, y), robot pose (rx, ry), robot heading
@@ -757,6 +758,7 @@ class WaypointNode(Node):
                 self.h_prev_error = bearing
                 steer = self.steer_kp*bearing + self.steer_ki*self.h_integral + self.steer_kd*derivative
                 self.outputPose['h'] = np.clip(steer, -self.steer_limit, self.steer_limit)
+                print(f"[DRIVE] target {(headingDeg + bearing)%360.:7.2f} deg | current {headingDeg:7.2f} deg | error {bearing:+7.2f} deg | cmd {self.outputPose['h']:+.2f} rad/s")
 
 
 
