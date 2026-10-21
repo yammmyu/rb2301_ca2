@@ -279,7 +279,6 @@ class WaypointNode(Node):
 
         # Values to modify
         self.size = 0.1
-        self.turn_value = 2      # please edit margin of error because it might miss it...
 
         # forward-speed PID gains (tune these). Error is the waypoint's distance ahead of the robot in metres, output in m/s.
         self.drive_kp, self.drive_ki, self.drive_kd = 6.0, 0.0, 0.3
@@ -709,7 +708,6 @@ class WaypointNode(Node):
             # ideally, desired %270
             self.desiredPose['h'] = value%360.
             # print(f"{rx:.3f}, {ry:.3f} to {x:.3f}, {y:.3f}   {value:.3f}")
-            self.outputPose['h'] = self.turn_value * (-1 if value < 0 else 1)
             # ⚠️⚠️⚠️ optionally, do PID
 
         else: # hasn't reached waypoint
