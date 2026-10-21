@@ -170,6 +170,8 @@ class WaypointNode(Node):
         self.expected_start = expected_start # Where this run says the robot should be placed (maze frame), real robot only
         self.calibrate = calibrate # Real robot: only print poses, never publish cmd_vel
         self.raw_pose = None # Latest pose exactly as Optitrack reported it (real robot only)
+        self.last_pose_time = None # When Optitrack last reported a new pose (real robot only)
+        self.pose_timeout = 0.25 # seconds without a new pose before the robot is stopped
         self._start_checked = False
         self._calibrate_ticks = 0
 
@@ -225,7 +227,10 @@ class WaypointNode(Node):
         This callback will run everytime the rclpy executor spins'''
         x, y = msg.pose.position.x, msg.pose.position.y
         heading = np.rad2deg(self.yaw_from_quaternion(msg.pose.orientation))
-        self.raw_pose = np.array((x,y,heading))
+        raw_pose = np.array((x,y,heading))
+        if self.raw_pose is None or not np.array_equal(raw_pose, self.raw_pose): # live tracking always jitters; a repeated pose means the rigid body is lost
+            self.last_pose_time = time.time()
+        self.raw_pose = raw_pose
         if self.frame is not None:
             x, y, heading = optitrack_to_maze(x, y, heading, self.frame) # Your code works in the maze frame, like in simulation
         self.pose = np.array((x,y,heading))
@@ -273,21 +278,24 @@ class WaypointNode(Node):
 
 
         # Values to modify
-        self.size = 0.2
+        self.size = 0.1
         self.turn_value = 2      # please edit margin of error because it might miss it...
-        self.min_run_value = 0.4
-        self.run_multiplier = 5. 
+
+        # forward-speed PID gains (tune these). Error is the waypoint's distance ahead of the robot in metres, output in m/s.
+        self.drive_kp, self.drive_ki, self.drive_kd = 6.0, 0.0, 0.3
+        self.min_run_value = 0.05  # minimum forward speed (m/s); lower than this and friction stops it just short of the waypoint
+        self.x_integral, self.x_prev_error = 0.0, None # forward PID state, reset on every new desiredPose
 
         # heading PID gains (tune these). Errors are in degrees, outputs in rad/s.
-        self.turn_kp, self.turn_ki, self.turn_kd = 1.0, 0.0, 0.06    # turn-on-the-spot at a waypoint
-        self.steer_kp, self.steer_ki, self.steer_kd = 0.8, 0.0, 0.004  # heading correction while driving
+        self.turn_kp, self.turn_ki, self.turn_kd = 0.3, 0.0, 0.04    # turn-on-the-spot at a waypoint
+        self.steer_kp, self.steer_ki, self.steer_kd = 0.02, 0.0, 0.004  # heading correction while driving
         self.steer_limit = 1.0     # max steering rate while driving (rad/s)
-        self.min_turn_value = 1.5  # minimum turn rate (rad/s); lower than this and friction stops it just short of the target
-        self.heading_tolerance = 0.3 # degrees; must be wide enough that min_turn_value*dt
+        self.min_turn_value = 0.05  # minimum turn rate (rad/s); lower than this and friction stops it just short of the target
+        self.heading_tolerance = 0.5 # degrees; must be wide enough that min_turn_value*dt
         self.dt = 0.05             # controller period, matches create_timer(0.05, ...)
         self.h_integral, self.h_prev_error = 0.0, None # heading PID state, reset on every new desiredPose
 
-        self.size_bounds = 0.2#/2.
+        self.size_bounds = 0.043#/2.
         self.delay_counter = 40 # give time to run cmd
 
         # check_grid_validity
@@ -313,6 +321,15 @@ class WaypointNode(Node):
             return # Calibration mode: look, don't drive
 
         self._check_start_once()
+
+        # Optitrack lost the robot (or the network dropped packets): stop instead of driving blind on a stale pose
+        if not self.is_simulation and now - self.last_pose_time > self.pose_timeout:
+            self.move_2D(0, 0, 0)
+            self.h_prev_error = self.x_prev_error = None # avoid a derivative kick when the pose comes back
+            if now - getattr(self, "_last_stale_log", 0.0) >= 1.0:
+                self._last_stale_log = now
+                self.get_logger().warn(f"No new Optitrack pose for {now - self.last_pose_time:.1f} s -- stopped until tracking comes back")
+            return
 
         if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
             self.print_map()
@@ -386,12 +403,12 @@ class WaypointNode(Node):
             # check if desired waypoint (heading & location) is reached 
 
             printStr = ''
-            # printStr += f'x: {self.desiredPose['x']:.2f} {actual['x']:.2f} ({self.outputPose['x']:.2f}) '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose['x'] != None)) else ''
-            # printStr += f'y: {self.desiredPose['y']:.2f} {actual['y']:.2f} ({self.outputPose['y']:.2f}) '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose['y'] != None)) else ''
-            printStr += f'x: {self.desiredPose['x']:.3f} {actual['x']:.3f} '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose['x'] != None)) else ''
-            printStr += f'y: {self.desiredPose['y']:.3f} {actual['y']:.3f} '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose['y'] != None)) else ''
-            printStr += f'({self.outputPose['x']:.2f})' if ((self.desiredPose['x'] != None) or (self.desiredPose['y'] != None)) else ''   # only x movement considered
-            printStr += f'h: {self.desiredPose['h']%360.:.2f} {actual['h']%360.:.2f} ({self.outputPose['h']:.2f}) ' + ('  ' if self.getDifferenceH(actual) else ' :)  ') if ((self.desiredPose['h'] != None)) else ''
+            # printStr += f'x: {self.desiredPose["x"]:.2f} {actual["x"]:.2f} ({self.outputPose["x"]:.2f}) '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose["x"] != None)) else ''
+            # printStr += f'y: {self.desiredPose["y"]:.2f} {actual["y"]:.2f} ({self.outputPose["y"]:.2f}) '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose["y"] != None)) else ''
+            # printStr += f'x: {self.desiredPose["x"]:.3f} {actual["x"]:.3f} '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose["x"] != None)) else ''
+            # printStr += f'y: {self.desiredPose["y"]:.3f} {actual["y"]:.3f} '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose["y"] != None)) else ''
+            # printStr += f'({self.outputPose["x"]:.2f})' if ((self.desiredPose["x"] != None) or (self.desiredPose["y"] != None)) else ''   # only x movement considered
+            # printStr += f'h: {self.desiredPose["h"]%360.:.2f} {actual["h"]%360.:.2f} ({self.outputPose["h"]:.2f}) ' + ('  ' if self.getDifferenceH(actual) else ' :)  ') if ((self.desiredPose["h"] != None)) else ''
             # print to see approach closer
             print(printStr)
             # check if it reached waypoint.
@@ -642,6 +659,7 @@ class WaypointNode(Node):
         self.desiredPose = {'x': None, 'y': None, 'h': None}
         self.outputPose = {'x': 0, 'y': 0, 'h': 0}
         self.h_integral, self.h_prev_error = 0.0, None # new target, clear old integral/derivative
+        self.x_integral, self.x_prev_error = 0.0, None
 
         # replace w/ waypoint: (in terms of world coordinates)
         [x, y] = grid_to_world(*self.WIP_WPs[self.WP_idx], self.origin, self.resolution)
@@ -747,7 +765,14 @@ class WaypointNode(Node):
 
             error = nx
             # x should be +ve when moving to goal, then flipping signs if it overshoots...
-            self.outputPose['x'] = max(self.run_multiplier*error, self.min_run_value) if (error > 0) else min(self.run_multiplier*error, -self.min_run_value)
+            # PID on forward error; move_2D clips it to max_translate_velocity
+            self.x_integral = np.clip(self.x_integral + error*self.dt, -0.2, 0.2) # clamp so it can't wind up
+            derivative = 0. if self.x_prev_error is None else (error - self.x_prev_error)/self.dt
+            self.x_prev_error = error
+            run = self.drive_kp*error + self.drive_ki*self.x_integral + self.drive_kd*derivative
+            if abs(run) < self.min_run_value: run = self.min_run_value * (1 if error >= 0 else -1)
+            self.outputPose['x'] = run
+            print(f"[SPEED] error {error:+.3f} m | P {self.drive_kp*error:+.2f} I {self.drive_ki*self.x_integral:+.2f} D {self.drive_kd*derivative:+.2f} | cmd {run:+.2f} m/s")
 
             # heading correction: PID on the bearing to the waypoint in the robot frame (+ve = waypoint is to the left)
             if np.hypot(nx, ny) > 0.05: # bearing is noisy when right on top of the waypoint
