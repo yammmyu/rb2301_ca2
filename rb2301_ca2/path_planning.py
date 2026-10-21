@@ -171,7 +171,10 @@ class WaypointNode(Node):
         self.calibrate = calibrate # Real robot: only print poses, never publish cmd_vel
         self.raw_pose = None # Latest pose exactly as Optitrack reported it (real robot only)
         self.last_pose_time = None # When Optitrack last reported a new pose (real robot only)
-        self.pose_timeout = 0.25 # seconds without a new pose before the robot is stopped
+        self.pose_timeout = 2.0 # seconds without a new pose before the robot is stopped; until then it dead-reckons along the path
+        self.pose_fresh = False # True when a new Optitrack pose has arrived since the last controller tick
+        self.dead_reckoning = False # True while tracking is lost and self.pose is estimated from the commands sent
+        self.last_cmd = (0., 0., 0.) # Last (x, y, turn) actually sent by move_2D, after clipping
         self._start_checked = False
         self._calibrate_ticks = 0
 
@@ -228,8 +231,10 @@ class WaypointNode(Node):
         x, y = msg.pose.position.x, msg.pose.position.y
         heading = np.rad2deg(self.yaw_from_quaternion(msg.pose.orientation))
         raw_pose = np.array((x,y,heading))
-        if self.raw_pose is None or not np.array_equal(raw_pose, self.raw_pose): # live tracking always jitters; a repeated pose means the rigid body is lost
-            self.last_pose_time = time.time()
+        if self.raw_pose is not None and np.array_equal(raw_pose, self.raw_pose): # live tracking always jitters; a repeated pose means the rigid body is lost
+            return self.pose # keep the dead-reckoned estimate instead of snapping back to the frozen pose
+        self.last_pose_time = time.time()
+        self.pose_fresh = True
         self.raw_pose = raw_pose
         if self.frame is not None:
             x, y, heading = optitrack_to_maze(x, y, heading, self.frame) # Your code works in the maze frame, like in simulation
@@ -253,6 +258,15 @@ class WaypointNode(Node):
         twist_msg.linear.x, twist_msg.linear.y, twist_msg.linear.z = float(x), float(y), 0.0
         twist_msg.angular.x, twist_msg.angular.y, twist_msg.angular.z = 0.0, 0.0, float(turn)
         self.publisher_.publish(twist_msg)
+        self.last_cmd = (float(x), float(y), float(turn))
+
+    def dead_reckon(self, dt:float):
+        '''Advance self.pose by the last command sent, for dt seconds. Used while Optitrack tracking is lost.'''
+        vx, vy, turn = self.last_cmd
+        h = np.deg2rad(self.pose[2])
+        self.pose = np.array((self.pose[0] + (vx*np.cos(h) - vy*np.sin(h))*dt,
+                              self.pose[1] + (vx*np.sin(h) + vy*np.cos(h))*dt,
+                              wrap_deg(self.pose[2] + np.rad2deg(turn)*dt)))
 
     def set_waypoints(self, waypoints:list):
         '''Set new waypoints when a goal has been reached'''
@@ -281,7 +295,7 @@ class WaypointNode(Node):
         self.size = 0.1
 
         # forward-speed PID gains (tune these). Error is the waypoint's distance ahead of the robot in metres, output in m/s.
-        self.drive_kp, self.drive_ki, self.drive_kd = 6.0, 0.0, 0.3
+        self.drive_kp, self.drive_ki, self.drive_kd = 7.0, 0.0, 0.3
         self.min_run_value = 0.05  # minimum forward speed (m/s); lower than this and friction stops it just short of the waypoint
         self.x_integral, self.x_prev_error = 0.0, None # forward PID state, reset on every new desiredPose
 
@@ -321,14 +335,28 @@ class WaypointNode(Node):
 
         self._check_start_once()
 
-        # Optitrack lost the robot (or the network dropped packets): stop instead of driving blind on a stale pose
-        if not self.is_simulation and now - self.last_pose_time > self.pose_timeout:
-            self.move_2D(0, 0, 0)
-            self.h_prev_error = self.x_prev_error = None # avoid a derivative kick when the pose comes back
-            if now - getattr(self, "_last_stale_log", 0.0) >= 1.0:
-                self._last_stale_log = now
-                self.get_logger().warn(f"No new Optitrack pose for {now - self.last_pose_time:.1f} s -- stopped until tracking comes back")
-            return
+        # Optitrack lost the robot (or the network dropped packets): keep following the path on a pose estimated from
+        # the commands sent (no real feedback), and stop if tracking stays lost for longer than pose_timeout
+        if not self.is_simulation:
+            stale = now - self.last_pose_time
+            if self.pose_fresh:
+                self.pose_fresh = False
+                if self.dead_reckoning:
+                    self.dead_reckoning = False
+                    self.h_prev_error = self.x_prev_error = None # the real pose can jump from the estimate; don't let that kick the derivative
+                    self.get_logger().info("Optitrack tracking back -- PID correcting from the real pose")
+            elif stale > self.pose_timeout:
+                self.move_2D(0, 0, 0)
+                self.h_prev_error = self.x_prev_error = None
+                if now - getattr(self, "_last_stale_log", 0.0) >= 1.0:
+                    self._last_stale_log = now
+                    self.get_logger().warn(f"No new Optitrack pose for {stale:.1f} s -- stopped until tracking comes back")
+                return
+            else:
+                self.dead_reckon(self.dt) # also fills the gaps if Optitrack simply publishes slower than this 20 Hz loop
+                if stale > 0.1 and not self.dead_reckoning:
+                    self.dead_reckoning = True
+                    self.get_logger().warn("Optitrack tracking lost -- following the path on dead reckoning")
 
         if self.path != self._last_printed_path: # Prints once immediately (map + start + goals), then again each time self.path changes
             self.print_map()
