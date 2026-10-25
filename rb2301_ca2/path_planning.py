@@ -6,7 +6,6 @@ import os
 import time
 
 import numpy as np
-import heapq
 import rclpy
 from rclpy.node import Node
 from rclpy.logging import set_logger_level, LoggingSeverity
@@ -279,7 +278,6 @@ class WaypointNode(Node):
         self.desiredPose = None
         self.outputPose = {'x': 0, 'y': 0, 'h': 0}
 
-        # print(self.map_array) # a 2D array of 99s and 0s, when printed is upside down
         self.getGraph() # get graph from obstacle map in my desired format >:)
         # to consider: 
         # print_map when self.path changes   -> draw_grid_map
@@ -292,8 +290,6 @@ class WaypointNode(Node):
 
 
         # Values to modify
-        self.size = 0.1
-
         # forward-speed PID gains (tune these). Error is the waypoint's distance ahead of the robot in metres, output in m/s.
         self.drive_kp, self.drive_ki, self.drive_kd = 7.0, 0.0, 0.3
         self.min_run_value = 0.05  # minimum forward speed (m/s); lower than this and friction stops it just short of the waypoint
@@ -303,12 +299,12 @@ class WaypointNode(Node):
         self.turn_kp, self.turn_ki, self.turn_kd = 0.3, 0.0, 0.04    # turn-on-the-spot at a waypoint
         self.steer_kp, self.steer_ki, self.steer_kd = 0.02, 0.0, 0.004  # heading correction while driving
         self.steer_limit = 1.0     # max steering rate while driving (rad/s)
-        self.min_turn_value = 0.05  # minimum turn rate (rad/s); lower than this and friction stops it just short of the target
+        self.min_turn_value = 1.5  # minimum turn rate (rad/s); lower than this and friction stops it just short of the target. Real robot: 0.05
         self.heading_tolerance = 0.5 # degrees; must be wide enough that min_turn_value*dt
         self.dt = 0.05             # controller period, matches create_timer(0.05, ...)
         self.h_integral, self.h_prev_error = 0.0, None # heading PID state, reset on every new desiredPose
 
-        self.size_bounds = 0.043#/2.
+        self.size_bounds = 0.1 # half a cell. Real robot: 0.043
         self.delay_counter = 40 # give time to run cmd
 
         # check_grid_validity
@@ -362,26 +358,7 @@ class WaypointNode(Node):
             self.print_map()
             self._last_printed_path = list(self.path)
         
-        
-        # cd rb2301_ca2
-        # chmod +x ca2.sh gz_ca2.sh
-        # colcon build --symlink-install
-        # ./gz_ca2.sh
-        # ./ca2.sh 
-
         # need to make heading stabilize towards desired heading
-        # return;
-        # gz service -s /gui/move_to/pose --reqtype gz.msgs.GUICamera --reptype gz.msgs.Boolean --timeout 2000 --req 'pose: {position: {x: 2, y: -1.8, z: 4.0}, orientation: {x: 0.0, y: 1.0, z: 0.0, w: 1.0}}'
-        # gz service -s /world/empty/set_pose --reqtype gz.msgs.Pose --reptype gz.msgs.Boolean --timeout 1000 --req "name: 'nanocar', position: {x: 0.0, y: 0.0, z: 0.0036}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}"
-
-
-
-        # self.move_2D(0, 0, 1) # it won't turn becuase of ✨ friction ✨
-        # print(self.pose[2])  # yaw 1.57 -> 180.
-
-        # self.move_2D(1, 0) # 0.05: barely moving, 0.1 slow
-        # print(self.pose[0]) # it goes up
-        # return
 
         ###### INSERT CODE HERE ######
         if (self.WP_idx >= len(self.WIP_WPs)) and (self.currentGoal_idx >= 0):
@@ -412,7 +389,6 @@ class WaypointNode(Node):
         
             # run continuously:
 
-            # print("RUNNING", self.currentGoal)
             # define desiredPose and outputPose
             if self.desiredPose != None: # previous callback has not completed to reach desiredPose
                 # in case you overshoot...
@@ -421,7 +397,6 @@ class WaypointNode(Node):
                 self.STATE = self.moveToNextWaypoint() 
             
             # basically a while ( true )
-            # mov = {x: 0, y: 0, heading: 0};
 
             # ideally it should finish moving first then check for each callback... but eh...
             self.move_2D(self.outputPose["x"], self.outputPose["y"], self.outputPose['h'])
@@ -430,17 +405,10 @@ class WaypointNode(Node):
             # check if desired waypoint (heading & location) is reached 
 
             printStr = ''
-            # printStr += f'x: {self.desiredPose["x"]:.2f} {actual["x"]:.2f} ({self.outputPose["x"]:.2f}) '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose["x"] != None)) else ''
-            # printStr += f'y: {self.desiredPose["y"]:.2f} {actual["y"]:.2f} ({self.outputPose["y"]:.2f}) '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose["y"] != None)) else ''
-            # printStr += f'x: {self.desiredPose["x"]:.3f} {actual["x"]:.3f} '+('     ' if self.getDifference('x', actual) else ' :)  ' ) if ((self.desiredPose["x"] != None)) else ''
-            # printStr += f'y: {self.desiredPose["y"]:.3f} {actual["y"]:.3f} '+('     ' if self.getDifference('y', actual) else ' :)  ' ) if ((self.desiredPose["y"] != None)) else ''
-            # printStr += f'({self.outputPose["x"]:.2f})' if ((self.desiredPose["x"] != None) or (self.desiredPose["y"] != None)) else ''   # only x movement considered
-            # printStr += f'h: {self.desiredPose["h"]%360.:.2f} {actual["h"]%360.:.2f} ({self.outputPose["h"]:.2f}) ' + ('  ' if self.getDifferenceH(actual) else ' :)  ') if ((self.desiredPose["h"] != None)) else ''
             # print to see approach closer
             print(printStr)
             # check if it reached waypoint.
             # consider margin of error:    ⚠️⚠️⚠️ %360.
-            # print(abs(self.desiredPose['h']%360. - actual['h']%360.))          may depend on your turning & running speed...     
             
             # the errors can accumulate oh noes...
             
@@ -469,27 +437,18 @@ class WaypointNode(Node):
         # to preserve axis shape when printing,
         # Arr map: y axis (right -> cols), x axis (down -> rows)
         
-        # for y in range(len(self.map_array)):
-        #     self.maze_arr.append([])
-        #     for x in range(len(self.map_array[y])):
-        #         self.maze_arr[y].append([])
         for x in range(len(self.map_array)):  # each row
             self.maze_arr.append([])
             for y in range(len(self.map_array[x])):
                 self.maze_arr[x].append([])
-        # print('size', len(self.maze_arr), len(self.maze_arr[0])) # 35, 30
 
         for x in range(len(self.maze_arr)): 
             for y in range(len(self.maze_arr[x])):
-                # c = self.map_array[-x][-y]
                 c = self.map_array[x][y]  
-                # print("#" if c == 99 else "." , end="") # so that the output can be rotated 180. to match the image.
                 if (c != 99): # unoccupied
                     self.maze_arr[x][y] = [1, 0] 
                 else:
                     self.maze_arr[x][y] = [0, 0] # [filled, heuristic]
-            # print()
-        # exit()
 
     def manhattan(self, A, B): return abs(B[0]-A[0]) + abs(B[1]-A[1])
     def calcH(self):
@@ -497,46 +456,15 @@ class WaypointNode(Node):
         # for each cell
         # find manhattan distance from cell to goal (grid index distance)
 
-        # print(len(self.maze_arr), len(self.maze_arr[0]), self.currentGoal) # 35, 30, 22x7
         for x in range(len(self.maze_arr)): 
             for y in range(len(self.maze_arr[x])):
                 self.maze_arr[x][y][1] = self.manhattan([x, y], self.currentGoal) # this should be integers
-                # self.maze_arr[y][x][1] = self.manhattan([y, x], [self.currentGoal[0], self.currentGoal[1]]) 
-                # manhattan([4, 25], [22, 7]) = 36
-
-                # 😭😭😭 why are you like this
-                # manhattan([25, 4], [7, 22]) = 36
-        # print(self.maze_arr) # Below "E" where start is should have values near 36 for the first goal
-        # self.debugMap()        
-        # exit()
-
-    def debugMap(self):
-        # sudo apt --fix-broken install
-        # sudo apt install python3-wheel python3-pip
-        # # pip install pyperclip    (nevermind...)
-        # sudo apt update
-        # sudo apt install python3-pyperclip
-        # pyperclip.copy(output_text)
-        # doesn't work OH FORGET IT
-
-        # (1 is free)
-        output_text = 'x y, [free? heuristic]\n'
-        for x in range(len(self.maze_arr)):  # 35 rows  
-            for y in range(len(self.maze_arr[x])):
-                output_text += f"{x} {y} [{self.maze_arr[x][y][0]} {self.maze_arr[x][y][1]}]\n"
-        with open('/home/km/Downloads/map_data.txt', "w") as file:
-            file.write(output_text)
-        # suppose x & y are the indexes of a 2D array. create a 2D grid where # if free = 0, . otherwise. append 2 characters to each based on heuristic. remove spacing.
-
-        exit()
 
     def findH(self, inp):
         [x, y] = inp
-        # print(x, y, self.maze_arr[x][y][1]) 
         # 4, 25, 36 (start)
         # 5, 25, 35 (closer; up x +1)
         # 4, 26, 37 (further; left y +1)
-        # exit()
         return self.maze_arr[x][y][1]
     
     def expand(self, parent):
@@ -550,7 +478,6 @@ class WaypointNode(Node):
             if (0 <= x) and (x < len(self.maze_arr)) and \
                 (0 <= y) and (y < len(self.maze_arr[x])): 
                 if (self.maze_arr[x][y][0] != 0): # not blue            
-                    # print(str(y) + ' ' + str(x), self.maze_arr[x][y])
                     children.append(NODE(parent, 
                         [x, y], 
                         parent.cost + 1, 
@@ -572,9 +499,6 @@ class WaypointNode(Node):
             minKey = i if (b) else minKey # a coordinate
 
         
-        # to_return = frontier[minKey]
-        # frontier = frontier[:minKey] + frontier[minKey+1:]
-        # return to_return
         return frontier.pop(minKey)  # remove element from frontier & return node
 
 
@@ -585,7 +509,6 @@ class WaypointNode(Node):
         # Example: self.path = [[4, 25], [2, 25], [0, 25], [0, 5], [1, 5], [2, 5], [3, 5], [3, 6], [3, 7], [3, 8]]
         self.path = []
         [rx, ry] = [*world_to_grid(*self.pose[:2], self.origin, self.resolution) ]        
-        # print('Start', rx, ry) # Start: 4, 25   wait why is it 5, 25
 
         frontier = [] # [ NODE, NODE2, ... ]
         reached  = {} # { NODE: ?, NODE2: ?, ... } "set"
@@ -595,33 +518,23 @@ class WaypointNode(Node):
         # start location
         start = NODE(None, [rx, ry], 0, 0)
         frontier.append( start ) # keeping track of the axes is a nightmare so just print to see results, okay?
-        # print('s', self.path) # default -750, 120
 
         found_goal = False
-        # print('set', start, fixedGoal);
-        # print(self.maze_arr[fixedGoal[0]][fixedGoal[1]])
 
-        # printStr = ''
         node = None
         while (len(frontier) > 0):                
             node = self.getPriority(frontier)  # Priority queue: order by g(n) + f(n)
             # REMOVES NODE FROM FRONTIER
 
-            # printStr += str(node["coord"]) + '\t'
             # ok some reason, to get the correct output, [22, 7] has to index [y=22][x=7]
-            # print(node.coord, fixedGoal); exit() # start: [4, 25] [22, 7]
 
             if ((node.coord[0] == fixedGoal[0]) and (node.coord[1] == fixedGoal[1])):
                 found_goal = True
-                # print("found goal!");
                 break
             
             children = self.expand( node )
-            # print(node.coord, end = '\t')
             for i in range(len(children)):
                 child = children[i]
-                # if (child.coord[0] == 5 and child.coord[1] == 27) {print('5', '27', rb.maze_arr[5][27] , self.findH([27, 5]))}  # rb.maze_arr[27][5]   is allowed
-                # if (child.coord[1] == 5 and child.coord[0] == 27) {print('27', '5', rb.maze_arr[27][5] , self.findH([5, 27]))} # rb.maze_arr[5][27] 0 so it's illegal!
                 if (not (child.ID in reached)):  # filter which nodes to go next here 
                     reached[child.ID] = child
                     frontier.append(child)
@@ -642,15 +555,12 @@ class WaypointNode(Node):
                 self.path.append(node.coord)
 
                 # none should be blocked (self.maze_arr[y][x][0] always 1)
-                # print(node.coord, self.findH(node.coord), self.maze_arr[node.coord[1]][node.coord[0]])
 
                 node = node.parent
             self.path.reverse()
-            # print(self.path)
         else:
             print("Error: path could not be found")
         # First path: [[4, 25], [4, 24], [4, 23], [4, 22], [4, 21], [4, 20], [4, 19], [4, 18], [4, 17], [5, 17], [6, 17], [7, 17], [8, 17], [9, 17], [10, 17], [11, 17], [12, 17], [13, 17], [14, 17], [15, 17], [16, 17], [17, 17], [18, 17], [19, 17], [20, 17], [21, 17], [22, 17], [23, 17], [24, 17], [25, 17], [26, 17], [27, 17], [27, 16], [27, 15], [27, 14], [26, 14], [25, 14], [24, 14], [23, 14], [22, 14], [22, 13], [22, 12], [22, 11], [22, 10], [22, 9], [22, 8], [22, 7]]
-        # exit()
 
     def makeWaypoints(self):
         self.WPs = [self.path[0]]
@@ -668,14 +578,9 @@ class WaypointNode(Node):
             
             self.WPs.append(self.path[len(self.path)-1]); # last cell    
         
-        # EXCLUDE FIRST WAYPOINT ⚠️⚠️⚠️
-        # self.WPs.pop(0)
-        # wait it breaks the thing oops
 
         self.WIP_WPs = deepcopy(self.WPs) # deep copy the entire thing
         
-        # testprint = [ [*self.path[i], *self.maze_arr[self.path[i][0]][self.path[i][1]] ] for i in range(len(self.path)) ] # verify all 3rd values are 1
-        # print('pth', testprint)
 
         # First wps: [[4, 25], [4, 17], [27, 17], [27, 14], [22, 14], [22, 7]]
         #  static pov           right,    up,      right,     down,     right
@@ -691,7 +596,6 @@ class WaypointNode(Node):
         # replace w/ waypoint: (in terms of world coordinates)
         [x, y] = grid_to_world(*self.WIP_WPs[self.WP_idx], self.origin, self.resolution)
         [rx, ry] = self.pose[:2]
-        # print(f"to: {self.WIP_WPs[self.WP_idx]} ({x:.2f}, {y:.2f}), at ({rx:.2f}, {ry:.2f})")        
 
         # if haven't reached waypoint: move forward (similar to check goal)
             # ⚠️⚠️⚠️ also allow heading adjustment later!!!
@@ -699,8 +603,13 @@ class WaypointNode(Node):
     
         STATE = ''
 
+        # waypoint 0 is the cell the robot is already standing in (A* starts from it), so it counts as reached wherever
+        # in that cell the robot is. Driving to its exact centre first means shuffling sideways -- Gazebo spawns the
+        # robot at (0, 0), a cell CORNER 0.14 m from the centre -- and it got stuck with the centre right beside it.
+        at_start_cell = (self.WP_idx == 0)
+
         # ⚠️⚠️⚠️ based on 0.2m square...     x +/- 0.2/2 ?
-        if ((abs(x - rx) <= self.size_bounds) and (abs(y - ry) <= self.size_bounds )): # has reached waypoint (circular :P)
+        if at_start_cell or ((abs(x - rx) <= self.size_bounds) and (abs(y - ry) <= self.size_bounds )): # has reached waypoint (circular :P)
             STATE = 'TURNING TO NEXT WAYPOINT'
 
             if self.WP_idx+1 >= len(self.WIP_WPs): return STATE # no more waypoints to turn to, so move on already to next goal...
@@ -708,8 +617,6 @@ class WaypointNode(Node):
             #            180 (down)
             # increase: CCW
 
-            headingDeg = self.pose[2]%360.
-            heading = np.deg2rad(headingDeg)  # ⚠️⚠️⚠️ i forgot radians lololol :|
             # register to turn: (+x or +y, i aint doing diagonals now)
             # read heading and next pos (a u-turn should never happen)
             # Ex: from (0, 2) (upward 0 heading) to (5, 2)   compare 0 & 5
@@ -735,7 +642,6 @@ class WaypointNode(Node):
             value = np.rad2deg(np.arctan2(y - ry, x - rx))
             # ideally, desired %270
             self.desiredPose['h'] = value%360.
-            # print(f"{rx:.3f}, {ry:.3f} to {x:.3f}, {y:.3f}   {value:.3f}")
             # ⚠️⚠️⚠️ optionally, do PID
 
         else: # hasn't reached waypoint
@@ -756,7 +662,6 @@ class WaypointNode(Node):
         # desiredPose is set by moveToNextWaypoint. it does not change
         self.outputPose = {'x': 0, 'y': 0, 'h': 0}
 
-        # [x, y] = grid_to_world(*self.WIP_WPs[self.WP_idx], self.origin, self.resolution)
         [rx, ry] = self.pose[:2]
         headingDeg = self.pose[2]%360.
         heading = np.deg2rad(headingDeg)
